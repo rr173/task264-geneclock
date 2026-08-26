@@ -1,14 +1,13 @@
-# 单阶段构建：合成生物基因调控时序复核台
-FROM golang:1.26.3-bookworm
+FROM docker.m.daocloud.io/library/golang:1.26.3-bookworm AS build
 
 WORKDIR /app
+ENV GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn GOTOOLCHAIN=local
 COPY go.mod go.sum ./
 RUN go mod download
-
 COPY . .
-ENV CGO_ENABLED=0
-RUN go build -o /bin/geneclock ./cmd/geneclock
+RUN CGO_ENABLED=0 go build -o /app/geneclock ./cmd/geneclock
 
-EXPOSE 8080
-ENTRYPOINT ["/bin/geneclock"]
+FROM docker.m.daocloud.io/library/alpine:3.20
+COPY --from=build /app/geneclock /app/geneclock
+ENTRYPOINT ["/app/geneclock"]
 CMD ["--smoke-test"]

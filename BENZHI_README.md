@@ -1,66 +1,39 @@
-基于 Go 实现的合成生物基因调控时序复核 Web 项目，一款后端服务，完成调控线路与诱导阶段编排、多通道荧光读数归一化与元件开关状态推断，并对表达先后顺序约束做复核与行为版本发布。
+# BENZHI 评测说明
 
-# BENZHI 评测说明：task264-geneclock
+基于 Go 实现的合成生物基因调控时序复核后端服务，一款后端服务，完成调控线路与诱导阶段编排、多通道荧光读数归一化与元件开关状态推断，并对表达先后顺序约束做复核与行为版本发布。
 
-合成生物基因调控时序复核台（全栈 Web 应用，纯 Go 后端，无外部服务依赖）。
-
-## 构建与运行
+## 启动
 
 ```bash
-# 构建（CGO 关闭，纯 Go SQLite 驱动）
-CGO_ENABLED=0 GOTOOLCHAIN=local go build ./...
-# 静态检查
-CGO_ENABLED=0 GOTOOLCHAIN=local go vet ./...
-# 单元测试
-CGO_ENABLED=0 GOTOOLCHAIN=local go test ./...
-# 端到端自检（--smoke-test 契约）
-CGO_ENABLED=0 GOTOOLCHAIN=local go run ./cmd/geneclock --smoke-test
-# 常驻服务
 CGO_ENABLED=0 GOTOOLCHAIN=local go run ./cmd/geneclock --addr :8080 --db geneclock.db
 ```
 
-## --smoke-test 契约
-
-不以长驻服务方式运行，而是：
-
-1. 创建调控线路（tetR-GFP 抑制回路）。
-2. 添加上游感应元件 sensor 与下游报告元件 gfp，添加「诱导激活」与「撤除恢复」两个诱导阶段。
-3. 创建试验并进入采集中，按通道导入 16 条荧光读数。
-4. 归一化报告基线（诱导前窗口均值），推断 2 元件 × 2 阶段共 4 条开关状态。
-5. 执行顺序约束检查：撤除阶段上游 sensor 平均 fold ≈ 2.18 仍未关闭，命中 late_shutdown 冲突。
-6. 标记一个饱和读数后复检冲突仍复现，试验发布，生成行为版本并冻结，验证冻结版本不可再流转。
-7. 通过统计接口验证持久化恢复（线路/试验/版本均可见）。
-
-任一步失败则以非零退出码结束并输出 `smoke-test FAILED`；全部通过输出 `smoke-test PASSED` 且退出码 0。
-
-## 关键 API
-
-| 能力 | 入口 |
-|---|---|
-| 创建线路 | POST /api/circuits |
-| 添加元件 | POST /api/circuits/{id}/elements |
-| 添加诱导阶段 | POST /api/circuits/{id}/stages |
-| 创建试验 | POST /api/circuits/{id}/trials |
-| 导入读数 | POST /api/trials/{id}/readings |
-| 归一化 | POST /api/trials/{id}/normalize |
-| 推断状态 | POST /api/trials/{id}/infer |
-| 顺序检查 | POST /api/trials/{id}/check-order |
-| 发布版本 | POST /api/trials/{id}/versions |
-| 冻结版本 | POST /api/versions/{id}/freeze |
-| 统计 | GET /api/stats |
-
-## Docker
+## 自检（不启动长驻服务）
 
 ```bash
-docker build -f Dockerfile -t task264-geneclock .
-docker run --rm task264-geneclock --smoke-test
-# 双架构
-bash build_benzhi_docker.sh task264-geneclock linux/arm64
-bash build_benzhi_docker.sh task264-geneclock linux/amd64
+go run ./cmd/geneclock --smoke-test
 ```
 
-## 版本锁
+`--smoke-test` 会真实创建 tetR-GFP 抑制回路、导入双通道读数、归一化基线、推断开关状态、复现 late_shutdown 顺序冲突、发布并冻结行为版本，关闭并重新打开数据库验证持久化，最后以 0 退出码结束。
 
-- Go 1.26.3（GOTOOLCHAIN=local，go.mod `go 1.26.3`）
-- SQLite 3.46.1（modernc.org/sqlite v1.52.0，纯 Go，CGO_ENABLED=0 可构建）
-- component-versions.json 与 go.mod / Dockerfile 完全一致
+## 构建门禁
+
+```bash
+CGO_ENABLED=0 GOTOOLCHAIN=local go build ./...
+CGO_ENABLED=0 GOTOOLCHAIN=local go vet   ./...
+CGO_ENABLED=0 GOTOOLCHAIN=local go test  ./...
+go run ./cmd/geneclock --smoke-test
+```
+
+## HTTP API（前缀 /api）
+
+线路：`POST /api/circuits`、`GET /api/circuits`、`GET /api/circuits/{id}`、`POST /api/circuits/{id}/archive`、`POST|GET /api/circuits/{id}/elements`、`POST|GET /api/circuits/{id}/stages`
+试验：`POST|GET /api/circuits/{id}/trials`、`POST /api/trials/{id}/transition`、`PATCH /api/trials/{id}/lag`
+读数：`POST /api/trials/{id}/readings`、`GET /api/trials/{id}/readings`、`PATCH /api/readings/{id}/window`
+分析：`POST /api/trials/{id}/normalize`、`GET /api/trials/{id}/normalized`、`POST /api/trials/{id}/infer`、`GET /api/trials/{id}/states`、`POST /api/trials/{id}/check-order`、`GET /api/trials/{id}/conflicts`
+版本：`POST /api/trials/{id}/versions`、`GET /api/trials/{id}/versions`、`GET /api/versions/{id}`、`POST /api/versions/{id}/share`、`POST /api/versions/{id}/freeze`、`POST /api/versions/{id}/supersede`
+统计：`GET /api/stats`、`GET /api/health`
+
+## 持久化
+
+SQLite（modernc.org/sqlite，CGO 无关）。表：circuits、elements、induction_stages、trials、readings、baselines、element_states、order_conflicts、behavior_versions。读数以 `(trial_id, seq, channel)` 幂等；行为版本冻结后绑定三份 JSON 快照且不可再流转。
